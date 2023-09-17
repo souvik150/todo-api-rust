@@ -1,11 +1,13 @@
-use chrono::prelude::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use diesel::{Queryable, Insertable, AsChangeset};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Queryable, Insertable, AsChangeset)]
+#[diesel(table_name = crate::repository::schema::todos)]
 pub struct Todo {
-    pub id: Option<String>,
+    #[serde(default)]
+    pub id: String,
     pub title: String,
     pub description: Option<String>,
-    pub created_at: Option<DateTime<Utc>>,
-    pub updated_at: Option<DateTime<Utc>>,
+    pub created_at: Option<chrono::NaiveDateTime>,
+    pub updated_at: Option<chrono::NaiveDateTime>,
 }

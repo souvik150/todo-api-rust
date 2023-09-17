@@ -1,60 +1,73 @@
 use std::fmt::Error;
 use chrono::prelude::*;
-use std::sync::{Arc, Mutex};
+use diesel::prelude::*;
+use diesel::r2d2::{self, ConnectionManager};
+use dotenv::dotenv;
 
 use crate::models::todo::Todo;
+use crate::repository::schema::todos::dsl::*;
+
+type DBPool = r2d2::Pool<ConnectionManager<PgConnection>>;
 
 pub struct Database {
-    pub todos: Arc<Mutex<Vec<Todo>>>,
+    pool: DBPool,
 }
 
 impl Database {
-    pub fn new() -> Self {
-        let todos = Arc::new(Mutex::new(vec![]));
-        Database { todos }
-    }
 
-    pub fn create_todo(&self, todo: Todo) -> Result<Todo, Error> {
-        let mut todos = self.todos.lock().unwrap();
-        let id = uuid::Uuid::new_v4().to_string();
-        let created_at = Utc::now();
-        let updated_at = Utc::now();
-        let todo = Todo {
-            id: Some(id),
-            created_at: Some(created_at),
-            updated_at: Some(updated_at),
-            ..todo
-        };
-        todos.push(todo.clone());
-        Ok(todo)
+    pub fn new() -> Self {
+        dotenv().ok();
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        let manager = ConnectionManager::<PgConnection>::new(database_url);
+        let pool: DBPool = r2d2::Pool::builder()
+            .build(manager)
+            .expect("Failed to create pool.");
+        println!("Database connected Successfully 🚀");
+        Database { pool }
     }
 
     pub fn get_todos(&self) -> Vec<Todo> {
-        let todos = self.todos.lock().unwrap();
-        todos.clone()
+        todos
+            .load::<Todo>(&mut self.pool.get().unwrap())
+            .expect("Error loading all todos")
     }
 
-    pub fn get_todo_by_id(&self, id: &str) -> Option<Todo> {
-        let todos = self.todos.lock().unwrap();
-        todos.iter().find(|todo| todo.id == Some(id.to_string())).cloned()
+    pub fn create_todo(&self, todo: Todo) -> Result<Todo, Error> {
+        let todo = Todo {
+            id: uuid::Uuid::new_v4().to_string(),
+            created_at: Some(Utc::now().naive_utc()),
+            updated_at: Some(Utc::now().naive_utc()),
+            ..todo
+        };
+        diesel::insert_into(todos)
+            .values(&todo)
+            .execute(&mut self.pool.get().unwrap())
+            .expect("Error creating new todo");
+        Ok(todo)
     }
 
-    pub fn update_todo_by_id(&self, id: &str, todo: Todo) -> Option<Todo> {
-      let mut todos = self.todos.lock().unwrap();
-      let updated_at = Utc::now();
-      let todo = Todo {
-          id: Some(id.to_string()),
-          updated_at: Some(updated_at),
-          ..todo
-      };
-      let index = todos.iter().position(|todo| todo.id == Some(id.to_string()))?;
-      todos[index] = todo.clone();
-      Some(todo)
+    pub fn get_todo_by_id(&self, todo_id: &str) -> Option<Todo> {
+        let todo = todos
+            .find(todo_id)
+            .get_result::<Todo>(&mut self.pool.get().unwrap())
+            .expect("Error loading todo by id");
+        Some(todo)
     }
 
-    pub fn delete_todo_by_id(&self, id: &str) -> Option<Todo> {
-      let mut todos = self.todos.lock().unwrap();
-      let index = todos.iter().position(|todo| todo.id == Some(id.to_string()))?;
-      Some(todos.remove(index))
-  }
+    pub fn delete_todo_by_id(&self, todo_id: &str) -> Option<usize> {
+        let count = diesel::delete(todos.find(todo_id))
+            .execute(&mut self.pool.get().unwrap())
+            .expect("Error deleting todo by id");
+        Some(count)
+    }
+
+
+    pub fn update_todo_by_id(&self, todo_id: &str, mut todo: Todo) -> Option<Todo> {
+        todo.updated_at = Some(Utc::now().naive_utc());
+        let todo = diesel::update(todos.find(todo_id))
+            .set(&todo)
+            .get_result::<Todo>(&mut self.pool.get().unwrap())
+            .expect("Error updating todo by id");
+        Some(todo)
+    }
 }
